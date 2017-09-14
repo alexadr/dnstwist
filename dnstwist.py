@@ -17,11 +17,12 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+from datetime import datetime
 
 __author__ = 'Marcin Ulikowski'
 __version__ = '1.04b'
 __email__ = 'marcin@ulikowski.pl'
-
+import os
 import re
 import sys
 import socket
@@ -523,6 +524,7 @@ class DomainThread(threading.Thread):
 		self.option_geoip = False
 		self.option_whois = False
 		self.option_ssdeep = False
+		self.option_hash = False
 		self.option_banners = False
 		self.option_mxcheck = False
 
@@ -679,6 +681,23 @@ class DomainThread(threading.Thread):
 						if req.status_code / 100 == 2:
 							domain['ssdeep-score'] = ssdeep.compare(self.ssdeep_orig, ssdeep_fuzz)
 
+			if self.option_hash:
+				import hashlib
+				if 'dns-a' in domain:
+					try:
+						req = requests.get(
+							self.uri_scheme + '://' + domain['domain-name'] + self.uri_path + self.uri_query,
+							timeout=REQUEST_TIMEOUT_HTTP, headers={'User-Agent': 'Mozilla/5.0 (dnstwist)'})
+						# ssdeep_fuzz = ssdeep.hash(req.text.replace(' ', '').replace('\n', ''))
+						m = hashlib.sha256()
+						m.update(req.text)
+						hash = m.hexdigest()
+					except Exception:
+						pass
+					else:
+						if req.status_code / 100 == 2:
+							domain['hash'] = hash
+
 			domain['domain-name'] = domain['domain-name'].decode('idna')
 
 			self.jobs.task_done()
@@ -707,7 +726,7 @@ def generate_csv(domains):
 	output = 'fuzzer,domain-name,dns-a,dns-aaaa,dns-mx,dns-ns,geoip-country,whois-created,whois-updated,ssdeep-score\n'
 
 	for domain in domains:
-		output += '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' % (domain.get('fuzzer'),
+		output += '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' % (datetime.now(), domain.get('fuzzer'),
 			domain.get('domain-name').encode('idna'),
 			one_or_all(domain.get('dns-a', [''])),
 			one_or_all(domain.get('dns-aaaa', [''])),
@@ -716,7 +735,8 @@ def generate_csv(domains):
 			domain.get('geoip-country', ''),
 			domain.get('whois-created', ''),
 			domain.get('whois-updated', ''),
-			str(domain.get('ssdeep-score', '')))
+			str(domain.get('ssdeep-score', '')),
+			str(domain.get('hash', '')))
 
 	return output
 
@@ -797,6 +817,7 @@ def main():
 	parser.add_argument('-g', '--geoip', action='store_true', help='perform lookup for GeoIP location')
 	parser.add_argument('-j', '--json', action='store_true', help='print output in JSON format')
 	parser.add_argument('-m', '--mxcheck', action='store_true', help='check if MX host can be used to intercept e-mails')
+	parser.add_argument('-H', '--hash', action='store_true', help='check if MX host can be used to intercept e-mails')
 	parser.add_argument('-r', '--registered', action='store_true', help='show only registered domain names')
 	parser.add_argument('-s', '--ssdeep', action='store_true', help='fetch web pages and compare their fuzzy hashes to evaluate similarity')
 	parser.add_argument('-t', '--threads', type=int, metavar='NUMBER', default=THREAD_COUNT_DEFAULT, help='start specified NUMBER of threads (default: %d)' % THREAD_COUNT_DEFAULT)
@@ -930,6 +951,8 @@ def main():
 			worker.ssdeep_orig = ssdeep_orig
 		if args.mxcheck:
 			worker.option_mxcheck = True
+		if args.hash:
+			worker.option_hash = True
 
 		worker.start()
 		threads.append(worker)
@@ -953,10 +976,32 @@ def main():
 
 	if args.registered:
 		domains_registered = []
+		from selenium import webdriver
+		from selenium.webdriver.chrome.options import Options
+		WINDOW_SIZE = "1920,1080"
+		chrome_options = Options()
+		chrome_options.add_argument("--headless")
+		# chrome_options.add_argument("--hide-scrollbars")
+		chrome_options.add_argument("--window-size=%s" % WINDOW_SIZE)
+		driver = webdriver.Chrome("/Users/tempadmin/Downloads/chromedriver", chrome_options=chrome_options)
 		for d in domains:
 			if 'dns-ns' in d or 'dns-a' in d:
 				domains_registered.append(d)
+				try:
+					if not os.path.exists(d.get('domain-name').encode('idna') + ".png"):
+						driver.get("http://"+d.get('domain-name').encode('idna'))
+						res = driver.save_screenshot(d.get('domain-name').encode('idna') + ".png")
+						if res != True:
+							t = -3
+				except Exception,e:
+					print e
+
+
 		domains = domains_registered
+
+
+
+
 		del domains_registered
 
 	if domains:
